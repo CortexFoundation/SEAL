@@ -26,8 +26,24 @@ endif()
 # Global configuration #
 ########################
 
+#message(STATUS "using riscv")
+#set(CMAKE_SYSTEM_NAME Generic)
+#set(CMAKE_SYSTEM_PROCESSOR riscv)
+#set(CMAKE_CROSSCOMPILING 1)
+##set(CMAKE_FIND_ROOT_PATH "/opt/riscv")
+#set(CMAKE_CXX_COMPILER "/opt/riscv/bin/riscv64-unknown-linux-gnu-g++")
+#set(CMAKE_C_COMPILER "/opt/riscv/bin/riscv64-unknown-linux-gnu-gcc")
+#set(CMAKE_ASM_COMPILER "/opt/riscv/bin/riscv64-unknown-linux-gnu-gcc")
+#set(CMAKE_LINKER "/opt/riscv/bin/riscv64-unknown-linux-gnu-ld")
+#set(CMAKE_AR "/opt/riscv/bin/riscv64-unknown-linux-gnu-ar")
+#set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+#set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+#set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+#set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+#set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 # [Option] CMAKE_BUILD_TYPE
 # Build in Release mode by default; otherwise use selected option
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY
@@ -43,6 +59,7 @@ else()
     set(SEAL_DEBUG OFF)
 endif()
 message(STATUS "Microsoft SEAL debug mode: ${SEAL_DEBUG}")
+
 
 # [Option] SEAL_USE_CXX17
 # Should we use C++14 or C++17?
@@ -250,7 +267,7 @@ endfunction()
 
 # [option] SEAL_USE_MSGSL
 set(SEAL_USE_MSGSL_OPTION_STR "Use Microsoft GSL")
-option(SEAL_USE_MSGSL ${SEAL_USE_MSGSL_OPTION_STR} ON)
+option(SEAL_USE_MSGSL ${SEAL_USE_MSGSL_OPTION_STR} OFF)
 
 # Download and configure
 if(SEAL_USE_MSGSL AND NOT MSVC)
@@ -305,7 +322,7 @@ endif()
 
 # [option] SEAL_USE_ZLIB
 set(SEAL_USE_ZLIB_OPTION_STR "Use ZLIB for compressed serialization")
-option(SEAL_USE_ZLIB ${SEAL_USE_ZLIB_OPTION_STR} ON)
+option(SEAL_USE_ZLIB ${SEAL_USE_ZLIB_OPTION_STR} OFF)
 
 # ZLIB has no VERSION given to project(), needs to suppress CMP0048 warning
 if(SEAL_USE_ZLIB AND NOT MSVC)
@@ -755,7 +772,7 @@ endif()
 
 # [option] SEAL_BUILD_EXAMPLES
 set(SEAL_BUILD_EXAMPLES_OPTION_STR "Build C++ examples for Microsoft SEAL")
-option(SEAL_BUILD_EXAMPLES ${SEAL_BUILD_EXAMPLES_OPTION_STR} OFF)
+option(SEAL_BUILD_EXAMPLES ${SEAL_BUILD_EXAMPLES_OPTION_STR} ON)
 
 if(SEAL_BUILD_EXAMPLES)
     add_executable(sealexamples)
