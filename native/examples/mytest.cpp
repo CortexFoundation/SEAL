@@ -5,7 +5,6 @@
 #include <vector>
 #include <stdlib.h>
 #include <time.h>
-#include <omp.h>
 
 using namespace std;
 using namespace seal;
