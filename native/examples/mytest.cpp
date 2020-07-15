@@ -5,6 +5,7 @@
 #include <vector>
 #include <stdlib.h>
 #include <time.h>
+#include <omp.h>
 
 using namespace std;
 using namespace seal;
@@ -29,7 +30,7 @@ class Test{
         parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
         parms.set_plain_modulus(1024);
       }else{
-        size_t poly_modulus_degree = 4096;
+        size_t poly_modulus_degree = degree;
         parms.set_poly_modulus_degree(poly_modulus_degree);
         parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
 
@@ -207,7 +208,9 @@ class Test{
       batch_encoder->encode(zero, zero_plaintext);
       Ciphertext zero_enc;
       encryptor->encrypt(zero_plaintext, zero_enc);
-      start = clock();
+      //start = clock();
+      double omp_start = omp_get_wtime();
+#pragma omp parallel for collapse(3) shared(image_encrypted, kernel_encrypted, zero_enc, out_encrypted)
       for(int oc = 0; oc < out_channels; oc++){
         for(int oh = 0; oh < OH; oh++){
           for(int ow = 0; ow < OW; ow++){
@@ -218,21 +221,20 @@ class Test{
                 int iw = ow * stride + kw - pad_w;
                 if(ih < 0 || ih >= H || iw < 0 || iw >= W){
                 }else{
-                  //sum += image[ih*W + iw] * kernel[oc*KH*KW + kh*KW + kw];  
                   Ciphertext axb;
                   evaluator->multiply(image_encrypted[ih*W+iw], kernel_encrypted[oc*KH*KW + kh*KW + kw], axb);
                   evaluator->add_inplace(sum, axb);
-                  evaluator->relinearize_inplace(sum, relin_keys);
                 } 
               }
+              evaluator->relinearize_inplace(sum, relin_keys);
             }
-            //out[oc*OH*OW + oh*OW + ow] = sum;
             out_encrypted[oc*OH*OW + oh*OW + ow] = sum;
           }
         }
       } 
-      end = clock();
-      cout << "the times of calculation: " << (double)(end-start)/CLOCKS_PER_SEC << "s" << endl;
+      //end = clock();
+      double omp_end = omp_get_wtime();
+      cout << "the times of calculation: " << (double)(omp_end-omp_start) << "s" << endl;
       start = clock();
       
       decrypted(out_encrypted, batch_outs);
@@ -380,7 +382,7 @@ void test_conv(){
   test.verify(out, out2);
 }
 void test_conv_batch(){
-  int batchs = 32;
+  int batchs = 8192;
   int H = 28, W = 28;
   int KH = 5, KW = 5;
   int stride = 2;
@@ -403,7 +405,7 @@ void test_conv_batch(){
   }
   conv_batch(image, kernel, out, batchs, H, W, KH, KW, stride, pad_h, pad_w, out_channels);
 
-  Test test(2048, true);
+  Test test(8192, true);
   test.conv_batch(image, kernel, out2, batchs, H, W, KH, KW, stride, pad_h, pad_w, out_channels);
   test.verify(out, out2);
 }
