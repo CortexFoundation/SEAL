@@ -13,7 +13,7 @@
 using namespace std;
 using namespace seal;
 
-class MNIST{
+class MNIST_HE{
   private:
     shared_ptr<SEALContext> context;
     KeyGenerator *keygen;
@@ -25,7 +25,7 @@ class MNIST{
     Decryptor *decryptor;
     BatchEncoder *batch_encoder;
   public:
-    MNIST(const int degree, bool batch = false){
+    MNIST_HE(const int degree, bool batch = false){
       EncryptionParameters parms(scheme_type::BFV);
       size_t poly_modulus_degree = degree;
       parms.set_poly_modulus_degree(poly_modulus_degree);
@@ -33,7 +33,7 @@ class MNIST{
       if(!batch){
         parms.set_plain_modulus(1024);
       }else{
-        parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 30));
+        parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
       }
 
       context = SEALContext::Create(parms);
@@ -59,7 +59,7 @@ class MNIST{
         ecp_data[i] = x_encrypted;
       }
     }
-    void encrypted(vector<vector<uint64_t>>& data, vector<Ciphertext>& ecp_data){
+    void encrypted(vector<vector<int64_t>>& data, vector<Ciphertext>& ecp_data){
 #pragma omp parallel for
       for(int i = 0; i < data.size(); i++){
         //Ciphertext vec_encrypted;
@@ -91,7 +91,12 @@ class MNIST{
         data[i] = hex_to_int(x_decrypted.to_string());
       }
     }
-    void decrypted(vector<Ciphertext>& ecp_data, vector<vector<uint64_t>>& data){
+    void decrypted(Ciphertext& ecp_data, vector<int64_t>& data){
+      Plaintext vec_decrypted;
+      decryptor->decrypt(ecp_data, vec_decrypted);
+      batch_encoder->decode(vec_decrypted, data);
+    }
+    void decrypted(vector<Ciphertext>& ecp_data, vector<vector<int64_t>>& data){
       for(int i = 0; i < ecp_data.size(); i++){
         Plaintext vec_decrypted;
         decryptor->decrypt(ecp_data[i], vec_decrypted);
@@ -104,7 +109,7 @@ class MNIST{
       int OW = (W + 2*pad_w - KW) / stride + 1;
       cout << "test conv..." << endl;
       cout << "batchs=" << batchs << ", image(" << H << "," << W << "), kernel(" << KH << "," << KW << "), stride=" << stride << ", out channels = " << out_channels << endl;
-      vector<uint64_t> zero(batchs, 0);
+      vector<int64_t> zero(batchs, 0);
       Plaintext zero_plaintext;
       batch_encoder->encode(zero, zero_plaintext);
       Ciphertext zero_enc;
@@ -125,10 +130,11 @@ class MNIST{
                   }else{
                     Ciphertext axb;
                     evaluator->multiply(image_encrypted[ic*H*W + ih*W+iw], kernel_encrypted[oc*KH*KW + kh*KW + kw], axb);
+                    evaluator->relinearize_inplace(axb, relin_keys);
                     evaluator->add_inplace(sum, axb);
+                    evaluator->relinearize_inplace(sum, relin_keys);
                   } 
                 }
-                evaluator->relinearize_inplace(sum, relin_keys);
               }
               out_encrypted[(oc*IC + ic)*OH*OW + oh*OW + ow] = sum;
             }
@@ -144,6 +150,7 @@ class MNIST{
       for(int i = 0; i < data.size(); i++){
         Ciphertext sq;
         evaluator->square(data[i], sq);
+        evaluator->relinearize_inplace(sq, relin_keys);
         data[i] = sq;
       }
       double end = omp_get_wtime();
@@ -154,7 +161,7 @@ class MNIST{
       double start = omp_get_wtime();
       int OH = H + 2 * padding - KH + 1;
       int OW = W + 2 * padding - KW + 1;
-      vector<uint64_t> zero(batchs, 0);
+      vector<int64_t> zero(batchs, 0);
       Plaintext zero_plaintext;
       batch_encoder->encode(zero, zero_plaintext);
       Ciphertext zero_enc;
@@ -171,9 +178,9 @@ class MNIST{
                 if(ih < 0 || ih >= H || iw < 0 || iw >= W){
                 }else{
                   evaluator->add_inplace(sum, input[oc*H*W+ih*W + iw]);
+                  evaluator->relinearize_inplace(sum, relin_keys);
                 }
               }
-              evaluator->relinearize_inplace(sum, relin_keys);
             } 
             output[oc * OH*OW + oh*OW + ow] = sum;
           }
@@ -182,10 +189,10 @@ class MNIST{
       double end = omp_get_wtime();
       cout << "scaled mean pool layer: " << end - start << "s" << endl;
     }
-    void fully_connected(vector<vector<uint64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
+    void fully_connected(vector<vector<int64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
       cout << "fully connected: H = " << H << ", W = " << W << endl;
       double start = omp_get_wtime();
-      vector<uint64_t> zero(batchs, 0);
+      vector<int64_t> zero(batchs, 0);
       Plaintext zero_plaintext;
       batch_encoder->encode(zero, zero_plaintext);
       Ciphertext zero_enc;
@@ -194,13 +201,25 @@ class MNIST{
       for(int i = 0; i < H; i++){
         Ciphertext sum = zero_enc;
         for(int j = 0; j < W; j++){
-          Ciphertext axb = input[j];
+          Ciphertext axb;
           Plaintext plain_weight;
           //evaluator->multiply(input[j], weight[i*W + j], axb);
           batch_encoder->encode(weight[i*W+j], plain_weight);
-          evaluator->multiply_plain_inplace(axb, plain_weight);
+          evaluator->multiply_plain(input[j], plain_weight, axb);
+          evaluator->relinearize_inplace(axb, relin_keys);
           evaluator->add_inplace(sum, axb);
           evaluator->relinearize_inplace(sum, relin_keys);
+          
+          //if(i == 0){
+          //  vector<int64_t> vec_sum(batchs); 
+          //  vector<int64_t> vec_input(batchs); 
+          //  vector<int64_t> vec_axb(batchs); 
+          //  decrypted(input[j], vec_input);
+          //  decrypted(axb, vec_axb);
+          //  decrypted(sum, vec_sum);
+          //  int k = 1;
+          //  cout << k << "," << i << "," << j << ":" << weight[i*W+j][k] << "," << vec_input[k] << "," << vec_axb[k] << "," << vec_sum[k] << " " << endl;
+          //}
         } 
         output[i] = sum;
       } 
