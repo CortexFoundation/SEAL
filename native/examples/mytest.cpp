@@ -49,7 +49,9 @@ class Test{
       decryptor = new Decryptor(context, secret_key);
       batch_encoder = new BatchEncoder(context);
     }
-    void encrypted(vector<int>& data, vector<Ciphertext>& ecp_data){
+    template<typename T>
+    void encrypted(vector<T>& data, vector<Ciphertext>& ecp_data){
+      cout << "encrypted data size = " << data.size() << endl;
       for(int i = 0; i < data.size(); i++){
         int x = data[i];
         Plaintext x_plain(to_string(x));
@@ -58,7 +60,10 @@ class Test{
         ecp_data[i] = x_encrypted;
       }
     }
-    void encrypted(vector<vector<uint64_t>>& data, vector<Ciphertext>& ecp_data){
+    template<typename T>
+    void encrypted(vector<vector<T>>& data, vector<Ciphertext>& ecp_data){
+      cout << "encrypted data size = " << data.size() << endl;
+#pragma omp parallel for
       for(int i = 0; i < data.size(); i++){
         Ciphertext vec_encrypted;
         Plaintext vec_plain;
@@ -82,19 +87,36 @@ class Test{
       }
       return value;
     }
-    void decrypted(vector<Ciphertext>& ecp_data, vector<int>& data){
+    template<typename T>
+    void decrypted(vector<Ciphertext>& ecp_data, vector<T>& data){
       for(int i = 0; i < ecp_data.size(); i++){
         Plaintext x_decrypted;
         decryptor->decrypt(ecp_data[i], x_decrypted);
         data[i] = hex_to_int(x_decrypted.to_string());
       }
     }
-    void decrypted(vector<Ciphertext>& ecp_data, vector<vector<uint64_t>>& data){
+    template<typename T>
+    void decrypted(Ciphertext& ecp_data, vector<T>& data){
+      Plaintext vec_decrypted;
+      decryptor->decrypt(ecp_data, vec_decrypted);
+      batch_encoder->decode(vec_decrypted, data);
+    }
+    template<typename T>
+    void decrypted(vector<Ciphertext>& ecp_data, vector<vector<T>>& data){
       for(int i = 0; i < ecp_data.size(); i++){
         Plaintext vec_decrypted;
         decryptor->decrypt(ecp_data[i], vec_decrypted);
         //data[i] = hex_to_int(x_decrypted.to_string());
         batch_encoder->decode(vec_decrypted, data[i]);
+      }
+    }
+    void transpose_vector(vector<vector<int64_t>>& in, vector<vector<int64_t>>& out, int rows, int cols){
+      for(int i = 0; i < cols; i++){
+        vector<int64_t> row_data(rows);
+        for(int j = 0; j < rows; j++){
+          row_data[j] = in[j][i];
+        }
+        out[i] = row_data;
       }
     }
     void gemm(vector<int>& A, vector<int>& B, vector<int>& C, const int M, const int K, const int N){
@@ -127,6 +149,58 @@ class Test{
       decrypted(c_encrypted, C);
       end = clock();
       cout << "the times of descrypted matrix C: " << (double)(end-start)/CLOCKS_PER_SEC << "s" << endl;
+    }
+    void gemm_batch(vector<vector<int64_t>>& A, vector<vector<int64_t>>& B, vector<vector<int64_t>>& C, const int batchs, const int M, const int K, const int N){
+      cout << "test gemm..." << endl;
+      cout << "M=" << M << " K=" << K << " N=" << N << endl;
+      vector<vector<int64_t>> batch_a(M*K), batch_b(K*N), batch_c(M*N);
+      cout << "transpose ..." << endl;
+      transpose_vector(A, batch_a, batchs, M*K);
+      transpose_vector(B, batch_b, batchs, K*N);
+      
+      vector<Ciphertext> a_encrypted(batch_a.size()), b_encrypted(batch_b.size()), c_encrypted(batch_c.size());
+      double start = omp_get_wtime();
+     // encrypted(batch_a, a_encrypted);
+      encrypted(batch_b, b_encrypted);
+      double end = omp_get_wtime();
+      cout << "the times of encrypted matrix A and B: " << (double)(end-start) << "s" << endl;
+
+      start = omp_get_wtime();
+#pragma omp parallel for collapse(2)
+      for(int i = 0; i < M; i++){
+        for(int j = 0; j < N; j++){
+          Plaintext zero("0");
+          Ciphertext sum;
+          encryptor->encrypt(zero, sum); 
+          for(int k = 0; k < K; k++){
+            Ciphertext axb;
+            Plaintext plain_a;
+            batch_encoder->encode(batch_a[i*K+k], plain_a);
+            evaluator->multiply_plain(b_encrypted[k*N+j], plain_a, axb);
+            evaluator->add_inplace(sum, axb);
+            evaluator->relinearize_inplace(sum, relin_keys);
+
+      ///      vector<int64_t> vec_sum(batchs); 
+      ///      vector<int64_t> vec_a(batchs); 
+      ///      vector<int64_t> vec_b(batchs); 
+      ///      vector<int64_t> vec_axb(batchs); 
+      ///      decrypted(a_encrypted[i*K+k], vec_a);
+      ///      decrypted(b_encrypted[k*N+j], vec_b);
+      ///      decrypted(axb, vec_axb);
+      ///      decrypted(sum, vec_sum);
+      ///      printf("%d %d %d, %lld * %lld = %lld, %lld\n", i, j, k, vec_a[0], vec_b[0], vec_axb[0], vec_sum[0]);
+          } 
+          c_encrypted[i*N+j] = sum;
+        }
+      }
+      end = omp_get_wtime();
+      cout << "the times of calculation: " << (double)(end-start) << "s" << endl;
+      start = omp_get_wtime();
+      for(auto& item : batch_c) item.resize(batchs);
+      decrypted(c_encrypted, batch_c);
+      transpose_vector(batch_c, C, M*N, batchs);
+      end = omp_get_wtime();
+      cout << "the times of descrypted matrix C: " << (double)(end-start) << "s" << endl;
     }
     void conv(vector<int>& image, vector<int>& kernel, vector<int>& out, int H, int W, int KH, int KW, int stride, int pad_h, int pad_w, int out_channels){
       cout << "test conv..." << endl;
@@ -260,7 +334,8 @@ class Test{
         cout << "success" << endl;
       }else cout << "failed" << endl;
     }
-    void verify(vector<vector<uint64_t>>& a, vector<vector<uint64_t>>& b){
+    template<typename T>
+    void verify(vector<vector<T>>& a, vector<vector<T>>& b){
       bool flag = true;
       if(a.size() != b.size()) {
         flag = false;
@@ -298,6 +373,21 @@ void gemm(vector<int>& A, vector<int>& B, vector<int>& C, const int M, const int
     }
   }
 }
+void gemm_batch(vector<vector<int64_t>>& A, vector<vector<int64_t>>& B, vector<vector<int64_t>>& C, const int batchs, const int M, const int K, const int N){
+  for(int b = 0; b < batchs; b++){
+    for(int i = 0; i < M; i++){
+      for(int j = 0; j < N; j++){
+        int64_t sum = 0;
+        for(int k = 0; k < K; k++){
+          int64_t tmp = A[b][i*K+k] * B[b][k*N+j];
+          sum += tmp;
+          //printf("%d %d %d, %lld * %lld = %lld, %lld\n", i, j, k, A[b][i*K+k], B[b][k*N+j], tmp, sum);
+        }
+        C[b][i*N+j] = sum;
+      }
+    }
+  }
+}
 void test_gemm(){
   int M = 8;
   int K = 8;
@@ -314,6 +404,30 @@ void test_gemm(){
   test.gemm(A, B, C, M, K, N);
   vector<int> C1(M*N);
   gemm(A, B, C1, M, K, N);
+  test.verify(C, C1);
+}
+void test_gemm_batch(){
+  int batchs = 8192;
+  int M = 100;
+  int K = 1250;
+  int N = 1;
+  vector<vector<int64_t>> A(batchs), B(batchs), C(batchs), C1(batchs);
+  for(int b = 0; b < batchs; b++){
+    A[b].resize(M*K);
+    for(int i = 0; i < M*K; i++){
+      A[b][i] = rand() % 10;
+    }
+    B[b].resize(K*N);
+    for(int i = 0; i < K*N; i++){
+      B[b][i] = rand() % 10;
+    }
+    C[b].resize(M*N);
+    C1[b].resize(M*N);
+  }
+
+  Test test(8192, true);
+  test.gemm_batch(A, B, C, batchs, M, K, N);
+  gemm_batch(A, B, C1, batchs, M, K, N);
   test.verify(C, C1);
 }
 void conv(vector<int>& image, vector<int>& kernel, vector<int>& out, int H, int W, int KH, int KW, int stride, int pad_h, int pad_w, int out_channels){
@@ -411,6 +525,7 @@ void test_conv_batch(){
 }
 int main(){
   //test_gemm();
-  test_conv_batch();
+  test_gemm_batch();
+  //test_conv_batch();
   return 0;
 }

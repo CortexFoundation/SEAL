@@ -191,38 +191,56 @@ class MNIST_HE{
     }
     void fully_connected(vector<vector<int64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
       cout << "fully connected: H = " << H << ", W = " << W << endl;
+      int M=H, K = W, N = 1;
       double start = omp_get_wtime();
-      vector<int64_t> zero(batchs, 0);
-      Plaintext zero_plaintext;
-      batch_encoder->encode(zero, zero_plaintext);
-      Ciphertext zero_enc;
-      encryptor->encrypt(zero_plaintext, zero_enc);
-#pragma omp parallel for
-      for(int i = 0; i < H; i++){
-        Ciphertext sum = zero_enc;
-        for(int j = 0; j < W; j++){
-          Ciphertext axb;
-          Plaintext plain_weight;
-          //evaluator->multiply(input[j], weight[i*W + j], axb);
-          batch_encoder->encode(weight[i*W+j], plain_weight);
-          evaluator->multiply_plain(input[j], plain_weight, axb);
-          evaluator->relinearize_inplace(axb, relin_keys);
-          evaluator->add_inplace(sum, axb);
-          evaluator->relinearize_inplace(sum, relin_keys);
-          
-          //if(i == 0){
-          //  vector<int64_t> vec_sum(batchs); 
-          //  vector<int64_t> vec_input(batchs); 
-          //  vector<int64_t> vec_axb(batchs); 
-          //  decrypted(input[j], vec_input);
-          //  decrypted(axb, vec_axb);
-          //  decrypted(sum, vec_sum);
-          //  int k = 1;
-          //  cout << k << "," << i << "," << j << ":" << weight[i*W+j][k] << "," << vec_input[k] << "," << vec_axb[k] << "," << vec_sum[k] << " " << endl;
-          //}
-        } 
-        output[i] = sum;
-      } 
+#pragma omp parallel for collapse(2)
+      for(int i = 0; i < M; i++){
+        for(int j = 0; j < N; j++){
+          Plaintext zero("0");
+          Ciphertext sum;
+          encryptor->encrypt(zero, sum); 
+          for(int k = 0; k < K; k++){
+            Ciphertext axb;
+            Plaintext plain_a;
+            batch_encoder->encode(weight[i*K+k], plain_a);
+            evaluator->multiply_plain(input[k*N+j], plain_a, axb);
+            evaluator->add_inplace(sum, axb);
+            evaluator->relinearize_inplace(sum, relin_keys);
+          } 
+          output[i*N+j] = sum;
+        }
+      }
+//      vector<int64_t> zero(batchs, 0);
+//      Plaintext zero_plaintext;
+//      batch_encoder->encode(zero, zero_plaintext);
+//      Ciphertext zero_enc;
+//      encryptor->encrypt(zero_plaintext, zero_enc);
+//#pragma omp parallel for
+//      for(int i = 0; i < H; i++){
+//        Ciphertext sum = zero_enc;
+//        for(int j = 0; j < W; j++){
+//          Ciphertext axb;
+//          Plaintext plain_weight;
+//          //evaluator->multiply(input[j], weight[i*W + j], axb);
+//          batch_encoder->encode(weight[i*W+j], plain_weight);
+//          evaluator->multiply_plain(input[j], plain_weight, axb);
+//          evaluator->relinearize_inplace(axb, relin_keys);
+//          evaluator->add_inplace(sum, axb);
+//          evaluator->relinearize_inplace(sum, relin_keys);
+//          
+//          //if(i == 0){
+//          //  vector<int64_t> vec_sum(batchs); 
+//          //  vector<int64_t> vec_input(batchs); 
+//          //  vector<int64_t> vec_axb(batchs); 
+//          //  decrypted(input[j], vec_input);
+//          //  decrypted(axb, vec_axb);
+//          //  decrypted(sum, vec_sum);
+//          //  int k = 1;
+//          //  cout << k << "," << i << "," << j << ":" << weight[i*W+j][k] << "," << vec_input[k] << "," << vec_axb[k] << "," << vec_sum[k] << " " << endl;
+//          //}
+//        } 
+//        output[i] = sum;
+//      } 
       double end = omp_get_wtime();
       cout << "fully connected layer: " << end - start << "s" << endl;
     }
