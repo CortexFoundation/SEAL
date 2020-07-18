@@ -204,6 +204,7 @@ class MNIST_HE{
             Plaintext plain_a;
             batch_encoder->encode(weight[i*K+k], plain_a);
             evaluator->multiply_plain(input[k*N+j], plain_a, axb);
+            evaluator->relinearize_inplace(axb, relin_keys);
             evaluator->add_inplace(sum, axb);
             evaluator->relinearize_inplace(sum, relin_keys);
           } 

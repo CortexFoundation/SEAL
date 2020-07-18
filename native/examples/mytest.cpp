@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <omp.h>
+#include <assert.h>
 
 using namespace std;
 using namespace seal;
@@ -28,7 +29,7 @@ class Test{
         size_t poly_modulus_degree = degree;
         parms.set_poly_modulus_degree(poly_modulus_degree);
         parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
-        parms.set_plain_modulus(1024);
+        parms.set_plain_modulus(10240000000);
       }else{
         size_t poly_modulus_degree = degree;
         parms.set_poly_modulus_degree(poly_modulus_degree);
@@ -44,20 +45,26 @@ class Test{
       keygen = new KeyGenerator(context);
       public_key = keygen->public_key();
       secret_key = keygen->secret_key();
-      relin_keys = keygen->relin_keys_local();
       encryptor = new Encryptor(context, public_key);
       decryptor = new Decryptor(context, secret_key);
-      batch_encoder = new BatchEncoder(context);
+      if(batch){
+        relin_keys = keygen->relin_keys_local();
+        batch_encoder = new BatchEncoder(context);
+      }
     }
     template<typename T>
     void encrypted(vector<T>& data, vector<Ciphertext>& ecp_data){
       cout << "encrypted data size = " << data.size() << endl;
       for(int i = 0; i < data.size(); i++){
-        int x = data[i];
+        T x = data[i];
         Plaintext x_plain(to_string(x));
         Ciphertext x_encrypted;
         encryptor->encrypt(x_plain, x_encrypted);
         ecp_data[i] = x_encrypted;
+
+        Plaintext plain_a;
+        decryptor->decrypt(x_encrypted, plain_a);
+        cout << plain_a.to_string() << " " << x_plain.to_string() << endl;
       }
     }
     template<typename T>
@@ -320,6 +327,23 @@ class Test{
       end = clock();
       cout << "the times of decrypted out: " << (double)(end-start)/CLOCKS_PER_SEC << "s" << endl;
     }
+
+    int test_limit(vector<int>& A){
+      vector<Ciphertext> enc_a(A.size());
+      encrypted(A, enc_a);
+      Plaintext zero("0");
+      Ciphertext sum;
+      encryptor->encrypt(zero, sum);
+      for(int i = 0; i < A.size(); i++){
+        evaluator->add_inplace(sum, enc_a[i]);  
+      }
+      int result = 0;
+      Plaintext plain_result;
+      cout << plain_result.to_string() << endl;
+      decryptor->decrypt(sum, plain_result);
+      result = hex_to_int(plain_result.to_string());
+      return result;
+    }
     void verify(vector<int>& a, vector<int>& b){
       bool flag = true;
       if(a.size() != b.size()) flag = false;
@@ -415,11 +439,11 @@ void test_gemm_batch(){
   for(int b = 0; b < batchs; b++){
     A[b].resize(M*K);
     for(int i = 0; i < M*K; i++){
-      A[b][i] = rand() % 10;
+      A[b][i] = rand() % 100;
     }
     B[b].resize(K*N);
     for(int i = 0; i < K*N; i++){
-      B[b][i] = rand() % 10;
+      B[b][i] = rand() % 100;
     }
     C[b].resize(M*N);
     C1[b].resize(M*N);
@@ -523,9 +547,61 @@ void test_conv_batch(){
   test.conv_batch(image, kernel, out2, batchs, H, W, KH, KW, stride, pad_h, pad_w, out_channels);
   test.verify(out, out2);
 }
+void test_limit(){
+  const int n = 100;
+  const int value = 50;
+  //Test test(2048);
+  vector<int> A(n, value);
+  //int64_t result = test.test_limit(A);
+  //cout << result << " " << n * value << endl;
+  //assert(result == value*n);
+  EncryptionParameters parms(scheme_type::BFV);
+  size_t poly_modulus_degree = 4096;
+  parms.set_poly_modulus_degree(poly_modulus_degree);
+  parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
+  parms.set_plain_modulus(102400000);
+  auto context = SEALContext::Create(parms);
+//  print_parameters(context);
+  KeyGenerator keygen(context);
+  PublicKey public_key = keygen.public_key();
+  SecretKey secret_key = keygen.secret_key();
+  auto relin_keys = keygen.relin_keys_local();
+  Encryptor encryptor(context, public_key);
+  Evaluator evaluator(context);
+  Decryptor decryptor(context, secret_key);
+  vector<Ciphertext> cip_a(n);
+  for(int i = 0; i < A.size(); i++){
+    //Plaintext x_plain(to_string(A[i]));
+    Plaintext x_plain("32");
+    Ciphertext x_encrypted;
+    encryptor.encrypt(x_plain, x_encrypted);
+
+//    Plaintext x_decrypted;
+//    decryptor.decrypt(x_encrypted, x_decrypted);
+//    cout << x_plain.to_string() << " " << x_decrypted.to_string() << endl;
+//    cip_a[i] = x_encrypted;
+  }
+  Plaintext zero("0");
+  Ciphertext sum;
+  encryptor.encrypt(zero, sum);
+  for(int i = 0; i < A.size(); i++){
+    //evaluator.add_inplace(sum, cip_a[i]);
+    Plaintext x_plain("fffff");
+    evaluator.add_plain_inplace(sum, x_plain);
+    //evaluator.square_inplace(sum);
+    evaluator.relinearize_inplace(sum, relin_keys);
+    Plaintext plain_sum;
+    decryptor.decrypt(sum, plain_sum);
+    cout << plain_sum.to_string() << endl;
+  }
+  Plaintext plain_sum;
+  decryptor.decrypt(sum, plain_sum);
+  cout << plain_sum.to_string() << " " << 0xfffff * n<< endl;
+}
 int main(){
   //test_gemm();
-  test_gemm_batch();
+  test_limit();
+//  test_gemm_batch();
   //test_conv_batch();
   return 0;
 }

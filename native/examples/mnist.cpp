@@ -17,7 +17,7 @@ void rand_init_vector(vector<vector<int64_t>>& data, int rows, int cols){
   for(int i = 0; i < rows; i++){
     data[i].resize(cols);
     for(int j = 0; j < data[i].size(); j++){
-      data[i][j] = rand()%5-2;
+      data[i][j] = rand()%2;
     }
   }
 }
@@ -55,7 +55,32 @@ void verify_decrypted(vector<vector<int64_t>>& a, vector<Ciphertext>& b, int H, 
   cout << "verify success" << endl;
 }
 
+void test_gemm_batch(){
+  int batchs = 8192;
+  int M = 100;
+  int K = 1250;
+  int N = 1;
+  vector<vector<int64_t>> A(batchs), B(batchs), C(batchs);
+  rand_init_vector(A, batchs, M*K);
+  rand_init_vector(B, batchs, N*K);
+  for(int b = 0; b < batchs; b++){
+    C[b].resize(M*N);
+  }
+  vector<vector<int64_t>> trans_a(M*K), trans_b(K*N), trans_c(M*N);
+  transpose_vector(A, trans_a, batchs, M*K);
+  transpose_vector(B, trans_b, batchs, N*K);
+
+  MNIST_HE mnist_he(8192, true);
+  MNIST mnist;
+  vector<Ciphertext> cip_b(K*N), cip_c(M*N);
+  mnist_he.encrypted(trans_b, cip_b);
+  mnist_he.fully_connected(trans_a, cip_b, cip_c, batchs, M, K);
+  mnist.fully_connected(A, B, C, batchs, M, K);
+  verify_decrypted(C, cip_c, batchs, M*N, mnist_he);
+}
 int main(){
+  //test_gemm_batch();
+  //return 0;
   //init input data
   int batchs = 8192;
   int H = 28, W = 28;
@@ -102,9 +127,9 @@ int main(){
 
   //activation
   {
-    mnist_he.square_activation(out_encrypted);
-    mnist.square_activation(outs);
-    verify_decrypted(outs, out_encrypted, batchs, out_channels*OH*OW, mnist_he);
+//    mnist_he.square_activation(out_encrypted);
+//    mnist.square_activation(outs);
+//    verify_decrypted(outs, out_encrypted, batchs, out_channels*OH*OW, mnist_he);
   }
 
   //pool
@@ -152,6 +177,12 @@ int main(){
     verify_decrypted(tmp_pool_out, pool_out2, batchs, IC*out_channels*OH*OW, mnist_he);
   }
 
+  //activation
+  {
+    //mnist_he.square_activation(pool_out2);
+    //mnist.square_activation(tmp_pool_out);
+    //verify_decrypted(tmp_pool_out, pool_out2, batchs, IC*out_channels*OH*OW, mnist_he);
+  }
   //fully connected
   int out_nodes = 100;
   vector<Ciphertext> fc_out(out_nodes);
@@ -160,11 +191,6 @@ int main(){
     rand_init_vector(fc_weight, batchs, out_nodes*pool_out2.size());
     transpose_vector(fc_weight, batch_fc_weight, batchs, out_nodes*pool_out2.size());
     vector<Ciphertext> fc_weight_encrypted(batch_fc_weight.size());
-//    cout << "start encry weight" << endl;
-//    mnist_he.encrypted(batch_fc_weight, fc_weight_encrypted);
-//    cout << "end encry weight" << endl;
-
-    //mnist_he.fully_connected(fc_weight_encrypted, pool_out2, fc_out, batchs, out_nodes, pool_out2.size());
     mnist_he.fully_connected(batch_fc_weight, pool_out2, fc_out, batchs, out_nodes, pool_out2.size());
 
     for(auto &item : outs) item.resize(out_nodes);
@@ -174,9 +200,9 @@ int main(){
 
   //activation
   {
-    mnist_he.square_activation(fc_out);
-    mnist.square_activation(outs);
-    verify_decrypted(outs, fc_out, batchs, out_nodes, mnist_he);
+    //mnist_he.square_activation(fc_out);
+    //mnist.square_activation(outs);
+    //verify_decrypted(outs, fc_out, batchs, out_nodes, mnist_he);
   }
 
   //fully connected
