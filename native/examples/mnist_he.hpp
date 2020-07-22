@@ -24,21 +24,32 @@ class MNIST_HE{
     Encryptor *encryptor;
     Decryptor *decryptor;
     BatchEncoder *batch_encoder;
+    int64_t module_value;
   public:
     MNIST_HE(const int degree, bool batch = false){
       EncryptionParameters parms(scheme_type::BFV);
       size_t poly_modulus_degree = degree;
       parms.set_poly_modulus_degree(poly_modulus_degree);
-      parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
+      vector<Modulus> coeff_modul = CoeffModulus::BFVDefault(poly_modulus_degree);
+//      for(int i = 0; i < coeff_modul.size(); i++)
+//      cout << coeff_modul[i].value() << endl;
+      parms.set_coeff_modulus(coeff_modul);
+      //parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
       if(!batch){
         parms.set_plain_modulus(1024);
       }else{
-        parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
+        //parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
+        Modulus module = PlainModulus::Batching(poly_modulus_degree, 42);
+        //parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
+        parms.set_plain_modulus(module);
+        module_value = module.value();
+//        cout << module_value << endl;
       }
 
       context = SEALContext::Create(parms);
       auto qualifiers = context->first_context_data()->qualifiers();
       cout << "Batching enabled: " << boolalpha << qualifiers.using_batching << endl;
+      print_parameters(context);
 
       evaluator = new Evaluator(context);
       keygen = new KeyGenerator(context);
@@ -104,11 +115,11 @@ class MNIST_HE{
       }
     }
 
-    void conv_batch(vector<Ciphertext>& image_encrypted, vector<Ciphertext>& kernel_encrypted, vector<Ciphertext>& out_encrypted, int batchs, int IC, int H, int W, int KH, int KW, int stride, int pad_h, int pad_w, int out_channels){
+    void conv_batch(vector<Ciphertext>& image_encrypted, vector<vector<int64_t>>& kernel, vector<Ciphertext>& out_encrypted, int batchs, int IC, int H, int W, int KH, int KW, int stride, int pad_h, int pad_w, int out_channels){
       int OH = (H + 2*pad_h - KH) / stride + 1;
       int OW = (W + 2*pad_w - KW) / stride + 1;
-      cout << "test conv..." << endl;
-      cout << "batchs=" << batchs << ", image(" << H << "," << W << "), kernel(" << KH << "," << KW << "), stride=" << stride << ", out channels = " << out_channels << endl;
+      cout << "Convolution Layer.. " << endl;
+      cout << "batchs=" << batchs << ", image(" << H << "," << W << "), kernel(" << KH << "," << KW << "), stride=" << stride << ", out channels = " << out_channels << ", (OH, OW)=(" << OH << "," << OW << ")" << endl;
       vector<int64_t> zero(batchs, 0);
       Plaintext zero_plaintext;
       batch_encoder->encode(zero, zero_plaintext);
@@ -116,7 +127,7 @@ class MNIST_HE{
       encryptor->encrypt(zero_plaintext, zero_enc);
       //start = clock();
       double omp_start = omp_get_wtime();
-#pragma omp parallel for collapse(3) shared(image_encrypted, kernel_encrypted, zero_enc, out_encrypted)
+#pragma omp parallel for collapse(3) shared(image_encrypted, kernel, zero_enc, out_encrypted)
       for(int oc = 0; oc < out_channels; oc++){
         for(int oh = 0; oh < OH; oh++){
           for(int ow = 0; ow < OW; ow++){
@@ -129,12 +140,14 @@ class MNIST_HE{
                   if(ih < 0 || ih >= H || iw < 0 || iw >= W){
                   }else{
                     Ciphertext axb;
-                    evaluator->multiply(image_encrypted[ic*H*W + ih*W+iw], kernel_encrypted[oc*KH*KW + kh*KW + kw], axb);
+                    Plaintext plain_kernel;
+                    batch_encoder->encode(kernel[oc*KH*KW+kh*KW+kw], plain_kernel);
+                    evaluator->multiply_plain(image_encrypted[ic*H*W + ih*W+iw], plain_kernel, axb);
                     evaluator->relinearize_inplace(axb, relin_keys);
                     evaluator->add_inplace(sum, axb);
-                    evaluator->relinearize_inplace(sum, relin_keys);
                   } 
                 }
+                evaluator->relinearize_inplace(sum, relin_keys);
               }
               out_encrypted[(oc*IC + ic)*OH*OW + oh*OW + ow] = sum;
             }
@@ -143,21 +156,26 @@ class MNIST_HE{
       } 
       //end = clock();
       double omp_end = omp_get_wtime();
-      cout << "the times of calculation: " << (double)(omp_end-omp_start) << "s" << endl;
+      cout << "The times of convolution layer: " << (double)(omp_end-omp_start) << "s" << endl;
     }
     void square_activation(vector<Ciphertext>& data){
+      cout << "Square Activatoin Layer..." << endl;
       double start = omp_get_wtime();
+#pragma omp parallel for
       for(int i = 0; i < data.size(); i++){
         Ciphertext sq;
         evaluator->square(data[i], sq);
+        //if(i < 5)
+        //  cout << decryptor->invariant_noise_budget(data[i]) << endl;
         evaluator->relinearize_inplace(sq, relin_keys);
         data[i] = sq;
       }
       double end = omp_get_wtime();
-      cout << "square activation layer: " << end - start << "s" << endl;
+      cout << "The times of square activation layer: " << end - start << "s" << endl;
     }
     void scaled_mean_pool(vector<Ciphertext>& input, vector<Ciphertext>& output,
         int batchs, int H, int W, int KH, int KW, int padding, int out_channels){
+      cout << "Scaled Mean Pool Layer..." << endl;
       double start = omp_get_wtime();
       int OH = H + 2 * padding - KH + 1;
       int OW = W + 2 * padding - KW + 1;
@@ -178,72 +196,126 @@ class MNIST_HE{
                 if(ih < 0 || ih >= H || iw < 0 || iw >= W){
                 }else{
                   evaluator->add_inplace(sum, input[oc*H*W+ih*W + iw]);
-                  evaluator->relinearize_inplace(sum, relin_keys);
                 }
               }
+              evaluator->relinearize_inplace(sum, relin_keys);
             } 
             output[oc * OH*OW + oh*OW + ow] = sum;
           }
         } 
       }
       double end = omp_get_wtime();
-      cout << "scaled mean pool layer: " << end - start << "s" << endl;
+      cout << "the times of scaled mean pool layer: " << end - start << "s" << endl;
     }
-    void fully_connected(vector<vector<int64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
-      cout << "fully connected: H = " << H << ", W = " << W << endl;
-      int M=H, K = W, N = 1;
+    void mul(vector<vector<int64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
+      cout << H << " " << W << " " << weight.size() << " " << weight[0].size() << " " << input.size() <<  endl;
+      cout << "module max value = " << module_value << endl;
+//      FILE *fp = fopen("b.txt", "w");
+//      FILE *fp2 = fopen("c.txt", "w");
       double start = omp_get_wtime();
-#pragma omp parallel for collapse(2)
-      for(int i = 0; i < M; i++){
-        for(int j = 0; j < N; j++){
-          Plaintext zero("0");
-          Ciphertext sum;
-          encryptor->encrypt(zero, sum); 
-          for(int k = 0; k < K; k++){
-            Ciphertext axb;
-            Plaintext plain_a;
-            batch_encoder->encode(weight[i*K+k], plain_a);
-            evaluator->multiply_plain(input[k*N+j], plain_a, axb);
-            evaluator->relinearize_inplace(axb, relin_keys);
-            evaluator->add_inplace(sum, axb);
-            evaluator->relinearize_inplace(sum, relin_keys);
-          } 
-          output[i*N+j] = sum;
-        }
-      }
-//      vector<int64_t> zero(batchs, 0);
-//      Plaintext zero_plaintext;
-//      batch_encoder->encode(zero, zero_plaintext);
-//      Ciphertext zero_enc;
-//      encryptor->encrypt(zero_plaintext, zero_enc);
 //#pragma omp parallel for
-//      for(int i = 0; i < H; i++){
-//        Ciphertext sum = zero_enc;
-//        for(int j = 0; j < W; j++){
-//          Ciphertext axb;
-//          Plaintext plain_weight;
-//          //evaluator->multiply(input[j], weight[i*W + j], axb);
-//          batch_encoder->encode(weight[i*W+j], plain_weight);
-//          evaluator->multiply_plain(input[j], plain_weight, axb);
-//          evaluator->relinearize_inplace(axb, relin_keys);
-//          evaluator->add_inplace(sum, axb);
-//          evaluator->relinearize_inplace(sum, relin_keys);
-//          
-//          //if(i == 0){
-//          //  vector<int64_t> vec_sum(batchs); 
-//          //  vector<int64_t> vec_input(batchs); 
-//          //  vector<int64_t> vec_axb(batchs); 
-//          //  decrypted(input[j], vec_input);
-//          //  decrypted(axb, vec_axb);
-//          //  decrypted(sum, vec_sum);
-//          //  int k = 1;
-//          //  cout << k << "," << i << "," << j << ":" << weight[i*W+j][k] << "," << vec_input[k] << "," << vec_axb[k] << "," << vec_sum[k] << " " << endl;
-//          //}
-//        } 
-//        output[i] = sum;
-//      } 
+      for(int i = 0; i < H; i++){
+        for(int j = 0; j < W; j++){
+          Ciphertext axb;
+          Plaintext plain_w;
+          vector<int64_t> one(batchs, 1);
+          for(int k = 0; k < batchs; k++){
+            one[k] = weight[i*W+j][k];
+//            fprintf(fp2, "%ld ", one[k]);
+          }
+        
+//          fprintf(fp2, "\n");
+          batch_encoder->encode(one, plain_w);
+          //batch_encoder->encode(weight[i*W+j], plain_w);
+          evaluator->multiply_plain(input[j], plain_w, axb);
+          //evaluator->add_plain(input[j], plain_w, axb);
+          evaluator->relinearize_inplace(axb, relin_keys);
+//          vector<int64_t> vec_input(batchs), vec_axb(batchs);
+//          decrypted(input[j], vec_input);
+//          decrypted(axb, vec_axb);
+//          fprintf(fp, "%ld %ld %ld\n", one[0], vec_input[0], vec_axb[0]);
+          output[i*W+j] = axb; 
+        } 
+      }
+//      fclose(fp);
+//      fclose(fp2);
       double end = omp_get_wtime();
-      cout << "fully connected layer: " << end - start << "s" << endl;
+      cout << "mul layer: " << end - start << "s" << endl;
+    }
+    void add(vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
+      cout << "module max value = " << module_value << endl;
+      FILE *fp = fopen("b.txt", "w");
+      double start = omp_get_wtime();
+//#pragma omp parallel for
+      for(int i = 0; i < H; i++){
+        Plaintext zero("0");
+        Ciphertext sum;
+        encryptor->encrypt(zero, sum); 
+        for(int j = 0; j < W; j++){
+          if(i == 0 && j < 10)
+          cout << decryptor->invariant_noise_budget(input[i*W+j]) << endl;
+
+          evaluator->add_inplace(sum, input[i*W+j]);
+//          vector<int64_t> vec_input(batchs), vec_sum(batchs);
+//          decrypted(input[i*W+j], vec_input);
+//          decrypted(sum, vec_sum);
+//          fprintf(fp, "%ld %ld\n", vec_input[0], vec_sum[0]);
+          evaluator->relinearize_inplace(sum, relin_keys);
+        } 
+        output[i] = sum;
+      }
+
+      fclose(fp);
+      double end = omp_get_wtime();
+      cout << "add layer: " << end - start << "s" << endl;
+    }
+
+    void fully_connected(vector<vector<int64_t>>& weight, vector<Ciphertext>& input, vector<Ciphertext>& output, int batchs, int H, int W){
+      cout << "Fully Connected Layer..." << endl;
+      cout << H << " " << W << " " << weight.size() << " " << weight[0].size() << " " << input.size() <<  endl;
+      //cout << "module max value = " << module_value << endl;
+      double start = omp_get_wtime();
+#pragma omp parallel for
+      for(int i = 0; i < H; i++){
+        Plaintext zero("0");
+        Ciphertext sum;
+        encryptor->encrypt(zero, sum); 
+        for(int j = 0; j < W; j++){
+          Ciphertext axb;
+          Plaintext plain_w;
+          batch_encoder->encode(weight[i*W+j], plain_w);
+          evaluator->multiply_plain(input[j], plain_w, axb);
+          evaluator->relinearize_inplace(axb, relin_keys);
+          //if(i == 0 && j < 5)
+          //cout << decryptor->invariant_noise_budget(input[j]) << " " << decryptor->invariant_noise_budget(axb) << endl;
+          evaluator->add_inplace(sum, axb);
+          evaluator->relinearize_inplace(sum, relin_keys);
+        } 
+        output[i] = sum;
+      }
+
+      double end = omp_get_wtime();
+      cout << "The times of fully connected layer: " << end - start << "s" << endl;
+    }
+
+    void test(){
+      vector<int64_t> one(8192, 1), input(8192);
+      for(int i = 0; i < 8192; i++){
+        one[i] = rand() % 2 + 1;
+        input[i] = rand() % 60000 + 60000;
+      }
+      Plaintext plain_one;
+      batch_encoder->encode(one, plain_one);
+      Plaintext plain_input;
+      batch_encoder->encode(input, plain_input);
+      Ciphertext input_enc;
+      encryptor->encrypt(plain_input, input_enc);
+      cout << decryptor->invariant_noise_budget(input_enc) << endl;
+      Ciphertext y;
+      evaluator->multiply_plain(input_enc, plain_one, y);
+      vector<int64_t> vec_y(8192);
+      decrypted(y, vec_y);
+      cout << one[0] << " " << input[0] << " " << vec_y[0] << " " << vec_y[1] << endl;
     }
 };
 

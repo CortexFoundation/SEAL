@@ -35,8 +35,12 @@ class Test{
         parms.set_poly_modulus_degree(poly_modulus_degree);
         parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
 
-        parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
+        Modulus module = PlainModulus::Batching(poly_modulus_degree, 20);
+        //parms.set_plain_modulus(PlainModulus::Batching(poly_modulus_degree, 20));
+        parms.set_plain_modulus(module);
+        cout << module.uint64_count() << " " << module.bit_count() << " " << module.value() << " " << module.is_prime() << endl;
       }
+
       context = SEALContext::Create(parms);
       auto qualifiers = context->first_context_data()->qualifiers();
       cout << "Batching enabled: " << boolalpha << qualifiers.using_batching << endl;
@@ -439,11 +443,11 @@ void test_gemm_batch(){
   for(int b = 0; b < batchs; b++){
     A[b].resize(M*K);
     for(int i = 0; i < M*K; i++){
-      A[b][i] = rand() % 100;
+      A[b][i] = rand() % 10;
     }
     B[b].resize(K*N);
     for(int i = 0; i < K*N; i++){
-      B[b][i] = rand() % 100;
+      B[b][i] = rand() % 10;
     }
     C[b].resize(M*N);
     C1[b].resize(M*N);
@@ -548,18 +552,13 @@ void test_conv_batch(){
   test.verify(out, out2);
 }
 void test_limit(){
-  const int n = 100;
+  const int n = 100000;
   const int value = 50;
-  //Test test(2048);
-  vector<int> A(n, value);
-  //int64_t result = test.test_limit(A);
-  //cout << result << " " << n * value << endl;
-  //assert(result == value*n);
   EncryptionParameters parms(scheme_type::BFV);
   size_t poly_modulus_degree = 4096;
   parms.set_poly_modulus_degree(poly_modulus_degree);
   parms.set_coeff_modulus(CoeffModulus::BFVDefault(poly_modulus_degree));
-  parms.set_plain_modulus(102400000);
+  parms.set_plain_modulus(10240000000);
   auto context = SEALContext::Create(parms);
 //  print_parameters(context);
   KeyGenerator keygen(context);
@@ -569,39 +568,43 @@ void test_limit(){
   Encryptor encryptor(context, public_key);
   Evaluator evaluator(context);
   Decryptor decryptor(context, secret_key);
-  vector<Ciphertext> cip_a(n);
-  for(int i = 0; i < A.size(); i++){
-    //Plaintext x_plain(to_string(A[i]));
-    Plaintext x_plain("32");
-    Ciphertext x_encrypted;
-    encryptor.encrypt(x_plain, x_encrypted);
 
-//    Plaintext x_decrypted;
-//    decryptor.decrypt(x_encrypted, x_decrypted);
-//    cout << x_plain.to_string() << " " << x_decrypted.to_string() << endl;
-//    cip_a[i] = x_encrypted;
-  }
   Plaintext zero("0");
-  Ciphertext sum;
+  int tmp = 0xfff;
+  Plaintext y_plain("fff");
+  Ciphertext sum, y;
   encryptor.encrypt(zero, sum);
-  for(int i = 0; i < A.size(); i++){
-    //evaluator.add_inplace(sum, cip_a[i]);
-    Plaintext x_plain("fffff");
-    evaluator.add_plain_inplace(sum, x_plain);
-    //evaluator.square_inplace(sum);
-    evaluator.relinearize_inplace(sum, relin_keys);
-    Plaintext plain_sum;
-    decryptor.decrypt(sum, plain_sum);
-    cout << plain_sum.to_string() << endl;
+  encryptor.encrypt(y_plain, y);
+  for(int i = 0; i < n; i++){
+    Plaintext x_plain("1");
+    Ciphertext axb;
+    evaluator.multiply_plain(y, x_plain, axb);
+    evaluator.add_inplace(sum, axb);
   }
   Plaintext plain_sum;
   decryptor.decrypt(sum, plain_sum);
-  cout << plain_sum.to_string() << " " << 0xfffff * n<< endl;
+  {
+    const string hex = plain_sum.to_string();
+    int value = 0;
+    int x = 1;
+    for(int i = hex.size()-1; i>=0; i--){
+      int c = 0;
+      if(hex[i] >= '0' && hex[i] <= '9')
+        c = hex[i] - '0';
+      else if(hex[i] >= 'A' && hex[i] <= 'F')
+        c = hex[i] - 'A' + 10;
+      else c = hex[i] - 'a' + 10;
+      value += x * c; 
+      x *= 16;
+    }
+    cout << plain_sum.to_string() << " " << value << " " << tmp * n<< endl;
+
+  }
 }
 int main(){
   //test_gemm();
   test_limit();
-//  test_gemm_batch();
+  //test_gemm_batch();
   //test_conv_batch();
   return 0;
 }

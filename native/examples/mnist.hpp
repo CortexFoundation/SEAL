@@ -42,8 +42,16 @@ class MNIST{
     void square_activation(vector<vector<int64_t>>& data){
       for(int i = 0; i < data.size(); i++){
         for(int j = 0; j < data[i].size(); j++){
-          int a = data[i][j];
+          int64_t a = data[i][j];
           data[i][j] = a*a;
+        }
+      }
+    }
+    void elemwise_sub(vector<vector<int64_t>>& data){
+      for(int i = 0; i < data.size(); i++){
+        for(int j = 0; j < data[i].size(); j++){
+          int64_t a = data[i][j];
+          data[i][j] = a-9;
         }
       }
     }
@@ -55,7 +63,7 @@ class MNIST{
         for(int oc = 0; oc < out_channels; oc++){
           for(int oh = 0; oh < OH; oh++){
             for(int ow = 0; ow < OW; ow++){
-              int sum = 0;
+              int64_t sum = 0;
               for(int kh = 0; kh < KH; kh++){
                 for(int kw = 0; kw < KW; kw++){
                   int ih = oh + kh - padding;
@@ -72,12 +80,44 @@ class MNIST{
         }
       }
     }
-    void fully_connected(vector<vector<int64_t>>& weight, vector<vector<int64_t>>& input, vector<vector<int64_t>>& output, int batchs, int H, int W){
+    void mul(vector<vector<int64_t>>& weight, vector<vector<int64_t>>& input, vector<vector<int64_t>>& output, int batchs, int H, int W){
+      //FILE *fp = fopen("a.txt", "w");
       for(int b = 0; b < batchs; b++){
         for(int i = 0; i < H; i++){
-          int sum = 0;
           for(int j = 0; j < W; j++){
-            int tmp = weight[b][i*W+j] * input[b][j];
+            int64_t tmp = weight[b][i*W+j] * input[b][j];
+            if(b == 0){
+       //       fprintf(fp, "%ld %ld %ld\n", weight[b][i*W+j], input[b][j], tmp);
+            }
+            weight[b][i*W+j] = tmp;
+          } 
+        } 
+      }
+      //fclose(fp);
+    }
+    void add(vector<vector<int64_t>>& weight, vector<vector<int64_t>>& input, vector<vector<int64_t>>& output, int batchs, int H, int W){
+      FILE *fp = fopen("a.txt", "w");
+      for(int b = 0; b < batchs; b++){
+        for(int i = 0; i < H; i++){
+          int64_t sum = 0;
+          for(int j = 0; j < W; j++){
+            sum += weight[b][i*W+j];// * input[b][j];
+            if(b == 0){
+              fprintf(fp, "%ld %ld\n", weight[b][i*W+j], sum);
+            }
+          } 
+          output[b][i] = sum;
+        } 
+      }
+      fclose(fp);
+    }
+    void fully_connected(vector<vector<int64_t>>& weight, vector<vector<int64_t>>& input, vector<vector<int64_t>>& output, int batchs, int H, int W){
+      //cout << H << " " << W << " " << weight.size() << " " << weight[0].size() << " " << input[0].size() <<  endl;
+      for(int b = 0; b < batchs; b++){
+        for(int i = 0; i < H; i++){
+          int64_t sum = 0;
+          for(int j = 0; j < W; j++){
+            int64_t tmp = weight[b][i*W+j] * input[b][j];
             sum += tmp;
             //if(b == 1 && i == 0)
             //  cout << weight[b][i*W+j] << "," << input[b][j] << ", "  << tmp << "," << sum << endl;
